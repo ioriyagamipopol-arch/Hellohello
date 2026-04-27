@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flappy Online - Assets Fixed</title>
+    
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
+    <style>
+        body { margin: 0; background: #111; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+        canvas { display: block; background: #70c5ce; border: 4px solid #fff; border-radius: 10px; }
+        #ui-layer { position: absolute; z-index: 100; text-align: center; color: white; background: rgba(0,0,0,0.9); padding: 20px; border-radius: 15px; width: 280px; border: 2px solid #f7951f; }
+        input { width: 100%; padding: 10px; margin: 5px 0; border-radius: 5px; border: none; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; background: #f7951f; border: none; color: white; cursor: pointer; font-weight: bold; border-radius: 5px; margin-top: 10px; }
+        .leaderboard-container { margin-top: 15px; background: #222; padding: 10px; border-radius: 8px; }
+        .score-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #333; font-size: 14px; }
+        #status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: red; margin-right: 5px; }
+    </style>
+</head>
+<body>
+
+<div id="ui-layer">
+    <div style="font-size: 10px; margin-bottom: 10px; text-align: right;">
+        <span id="status-dot"></span> <span id="status-text">Connecting...</span>
+    </div>
+
+    <div id="auth-box">
+        <h2>Flappy Login</h2>
+        <input type="email" id="email" placeholder="Email">
+        <input type="password" id="password" placeholder="Password">
+        <button onclick="handleAuth('login')">Login</button>
+        <button onclick="handleAuth('signup')" style="background:#444">Sign Up</button>
+    </div>
+
+    <div id="welcome-section" style="display:none;">
+        <h3 id="user-greeting">Hello!</h3>
+        <p id="local-high-score" style="color:#f7951f; font-size:12px;">Best: 0</p>
+        <button onclick="startGame()" style="font-size: 20px;">PLAY NOW</button>
+        <div class="leaderboard-container">
+            <span style="color:#f7951f; font-size: 12px;">Global Rankings</span>
+            <div id="scores-list" style="margin-top:8px; min-height: 50px;">Waiting...</div>
+        </div>
+        <button onclick="auth.signOut()" style="background:transparent; color:#888; font-size:10px;">Logout</button>
+    </div>
+</div>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+// 1. FIREBASE SETUP
+const firebaseConfig = {
+  apiKey: "AIzaSyAeri0_q_drqxSQmrUOuXWLfPoZLtBwQwQ",
+  authDomain: "jen-online.firebaseapp.com",
+  projectId: "jen-online",
+  storageBucket: "jen-online.firebasestorage.app",
+  messagingSenderId: "936359949325",
+  appId: "1:936359949325:web:a1c971d9e9eaa4105f9144",
+  measurementId: "G-CQSTY995WR"
+};
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+// 2. ASSETS SETUP (Correct Raw GitHub Links)
+const birdImg = new Image(); birdImg.src = "https://raw.githubusercontent.com/ioriyagamipopol-arch/Bastagame/main/bird.png";
+const bgImg = new Image(); bgImg.src = "https://raw.githubusercontent.com/ioriyagamipopol-arch/Bastagame/main/bg.png";
+const pipeImg = new Image(); pipeImg.src = "https://raw.githubusercontent.com/ioriyagamipopol-arch/Bastagame/main/pipe.png";
+
+const bgMusic = new Audio("https://raw.githubusercontent.com/ioriyagamipopol-arch/Bastagame/main/bgm_main.mp3");
+const hitSound = new Audio("https://raw.githubusercontent.com/ioriyagamipopol-arch/Bastagame/main/sfx_hit.wav");
+const tapSound = new Audio("https://raw.githubusercontent.com/ioriyagamipopol-arch/Bastagame/main/sfx_tap.mp3");
+
+bgMusic.loop = true;
+bgMusic.volume = 0.5;
+
+// 3. AUTH & DATABASE
+let currentUser = null;
+
+async function handleAuth(type) {
+    const email = document.getElementById('email').value;
+    const password = document.getElementById('password').value;
+    try {
+        if (type === 'signup') await auth.createUserWithEmailAndPassword(email, password);
+        else await auth.signInWithEmailAndPassword(email, password);
+    } catch (e) { alert("Auth Error: Check TrebEdit Play Button settings."); }
+}
+
+auth.onAuthStateChanged(user => {
+    if (user) {
+        currentUser = user;
+        document.getElementById('auth-box').style.display = 'none';
+        document.getElementById('welcome-section').style.display = 'block';
+        document.getElementById('user-greeting').innerText = user.email.split('@')[0];
+        fetchLeaderboard();
+        updateLocalUI();
+    } else {
+        document.getElementById('auth-box').style.display = 'block';
+        document.getElementById('welcome-section').style.display = 'none';
+    }
+});
+
+async function fetchLeaderboard() {
+    const list = document.getElementById('scores-list');
+    try {
+        const snap = await db.collection("leaderboard").orderBy("score", "desc").limit(5).get();
+        list.innerHTML = "";
+        snap.forEach(doc => {
+            const d = doc.data();
+            list.innerHTML += `<div class="score-row"><span>${d.username}</span><b>${d.score}</b></div>`;
+        });
+        document.getElementById('status-dot').style.background = 'lime';
+        document.getElementById('status-text').innerText = 'Online';
+    } catch(e) { 
+        list.innerHTML = "Offline mode."; 
+        document.getElementById('status-dot').style.background = 'red';
+    }
+}
+
+function updateLocalUI() {
+    const best = localStorage.getItem("flappy_best") || 0;
+    document.getElementById('local-high-score').innerText = "Personal Best: " + best;
+}
+
+async function saveScore(s) {
+    const best = localStorage.getItem("flappy_best") || 0;
+    if (s > best) localStorage.setItem("flappy_best", s);
+    updateLocalUI();
+
+    if (currentUser) {
+        try {
+            await db.collection("leaderboard").doc(currentUser.uid).set({
+                username: currentUser.email.split('@')[0],
+                score: Math.max(s, best)
+            });
+            fetchLeaderboard();
+        } catch(e) { console.log("Sync failed"); }
+    }
+}
+
+// 4. GAME LOGIC
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+canvas.width = 320; canvas.height = 480;
+
+let bird, pipes, score, gameRunning = false;
+
+function init() {
+    bird = { x: 50, y: 200, size: 28, gravity: 0.6, lift: -8, velocity: 0 };
+    pipes = []; score = 0;
+}
+
+function startGame() {
+    init();
+    document.getElementById('ui-layer').style.display = 'none';
+    gameRunning = true;
+    bgMusic.play();
+}
+
+function gameOver() {
+    gameRunning = false;
+    bgMusic.pause();
+    hitSound.play();
+    document.getElementById('ui-layer').style.display = 'block';
+    saveScore(score);
+}
+
+function jump() { 
+    if(gameRunning) {
+        bird.velocity = bird.lift;
+        tapSound.currentTime = 0;
+        tapSound.play();
+    }
+}
+
+window.addEventListener("keydown", (e) => { if(e.code === "Space") jump(); });
+canvas.addEventListener("touchstart", (e) => { e.preventDefault(); jump(); });
+
+function update() {
+    if (!gameRunning) return;
+    bird.velocity += bird.gravity;
+    bird.y += bird.velocity;
+
+    if (Date.now() % 100 < 15 && (pipes.length === 0 || pipes[pipes.length-1].x < 180)) {
+        let h = Math.random() * 200 + 50;
+        pipes.push({ x: canvas.width, top: h, gap: 120, passed: false });
+    }
+
+    pipes.forEach((p, i) => {
+        p.x -= 2.5;
+        if(p.x + 50 < 0) pipes.splice(i, 1);
+        if(bird.x + bird.size - 5 > p.x && bird.x + 5 < p.x + 50) {
+            if(bird.y + 5 < p.top || bird.y + bird.size - 5 > p.top + p.gap) gameOver();
+        }
+        if(!p.passed && p.x < bird.x) { p.passed = true; score++; }
+    });
+    if(bird.y > canvas.height || bird.y < 0) gameOver();
+}
+
+function draw() {
+    // Draw Background
+    ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
+
+    if (gameRunning) {
+        // Draw Bird
+        ctx.drawImage(birdImg, bird.x, bird.y, bird.size, bird.size);
+        
+        // Draw Pipes
+        pipes.forEach(p => {
+            // Top Pipe (Flipped)
+            ctx.save();
+            ctx.translate(p.x + 25, p.top);
+            ctx.scale(1, -1);
+            ctx.drawImage(pipeImg, -25, 0, 50, 400);
+            ctx.restore();
+            
+            // Bottom Pipe
+            ctx.drawImage(pipeImg, p.x, p.top + p.gap, 50, 400);
+        });
+
+        // Score
+        ctx.fillStyle = "white";
+        ctx.font = "bold 24px Arial";
+        ctx.strokeStyle = "black";
+        ctx.lineWidth = 3;
+        ctx.strokeText(score, canvas.width/2 - 10, 50);
+        ctx.fillText(score, canvas.width/2 - 10, 50);
+    }
+    requestAnimationFrame(() => { update(); draw(); });
+}
+draw();
+</script>
+</body>
+</html>
